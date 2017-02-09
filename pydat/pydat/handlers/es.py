@@ -176,7 +176,6 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
     results = {'success': False}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
@@ -307,7 +306,6 @@ def advDataTableSearch(query, skip, pagesize, unique = False):
 
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
@@ -444,7 +442,6 @@ def advanced_search(search_string, skip = 0, size = 20, unique = False): #TODO X
     results = {'success': False}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
