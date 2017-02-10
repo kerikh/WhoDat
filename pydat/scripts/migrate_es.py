@@ -65,9 +65,9 @@ def bulkThread(scanFinished, des, dest, bulkQueue, add_aliases, max_docs, bulkOp
         if (max_docs is not None) and (written_docs % max_docs == 0):
             rollOverAlias(des, dest, add_aliases, max_docs)
 
-def scanThread(scanFinished, es, source, dest, bulkQueue, preserveID):
+def scanThread(scanFinished, es, source, dest, bulkQueue, preserveID, scanOpts):
     global read_docs
-    for doc in helpers.scan(es, index=source):
+    for doc in helpers.scan(es, index=source, size=scanOpts['size']):
         _id = doc['_id']
         _type = doc['_type']
         _source = doc['_source']
@@ -87,7 +87,7 @@ def scanThread(scanFinished, es, source, dest, bulkQueue, preserveID):
 
     scanFinished.set()
 
-def copyIndices(total_docs, es, des, source, dest, max_docs=None, preserveID=True, add_aliases=None, bulkOpts=None):
+def copyIndices(total_docs, es, des, source, dest, max_docs=None, preserveID=True, add_aliases=None, bulkOpts=None, scanOpts=None):
     scanFinished = Event()
     stop = Event()
 
@@ -104,7 +104,7 @@ def copyIndices(total_docs, es, des, source, dest, max_docs=None, preserveID=Tru
     bulk_thread = threading.Thread(target=bulkThread, args=(scanFinished, des, dest, bulkQueue, add_aliases, max_docs, bulkOpts))
     bulk_thread.start()
 
-    scan_thread = threading.Thread(target=scanThread, args=(scanFinished, es, source, dest, bulkQueue, preserveID))
+    scan_thread = threading.Thread(target=scanThread, args=(scanFinished, es, source, dest, bulkQueue, preserveID, scanOpts))
     scan_thread.start()
 
     scan_thread.join()
@@ -130,11 +130,14 @@ def main():
 
     parser.add_argument("--bulk-threads", type=int, dest="bulk_threads", default=4, help="Number of bulk threads to use with destination ES cluster")
     parser.add_argument("--bulk-size", type=int, dest="bulk_size", default=1000, help="Number of records to batch when making bulk requests")
+    parser.add_argument("--scan-size", type=int, dest="scan_size", default=1000, help="Number of records to fetch when making scan requests")
 
     options = parser.parse_args()
 
     bulk_options = {'threads': options.bulk_threads,
                     'size': options.bulk_size}
+
+    scan_options = {'size': options.scan_size}
 
     data_template = None
     template_path = os.path.dirname(os.path.realpath(__file__))
@@ -242,7 +245,7 @@ def main():
 
     sys.stdout.write("Migrating Metadata Index ... \n")
     # Copy over metadata
-    copyIndices(meta_count, source_es, dest_es, "@%s_meta" % (options.index_prefix), WHOIS_META, bulkOpts=bulk_options)
+    copyIndices(meta_count, source_es, dest_es, "@%s_meta" % (options.index_prefix), WHOIS_META, bulkOpts=bulk_options, scanOpts=scan_options)
     sys.stdout.write("Done\n")
 
     try:
@@ -253,7 +256,7 @@ def main():
 
     sys.stdout.write("Migrating Delta Indices ... \n")
     # Copy over delta data
-    copyIndices(delta_count, source_es, dest_es, "%s-*-d" % (options.index_prefix), WHOIS_DELTA_WRITE, max_docs=options.rollover_docs, preserveID=False, add_aliases={WHOIS_DELTA_SEARCH:{}}, bulkOpts=bulk_options)
+    copyIndices(delta_count, source_es, dest_es, "%s-*-d" % (options.index_prefix), WHOIS_DELTA_WRITE, max_docs=options.rollover_docs, preserveID=False, add_aliases={WHOIS_DELTA_SEARCH:{}}, bulkOpts=bulk_options, scanOpts=scan_options)
     sys.stdout.write("Done\n")
 
     try:
@@ -264,7 +267,7 @@ def main():
 
     sys.stdout.write("Migrating Original Indices ... \n")
     # Copy over original data
-    copyIndices(orig_count, source_es, dest_es, "%s-*-o" % (options.index_prefix), WHOIS_ORIG_WRITE, max_docs=options.rollover_docs, preserveID=True, add_aliases={WHOIS_ORIG_SEARCH:{}}, bulkOpts=bulk_options)
+    copyIndices(orig_count, source_es, dest_es, "%s-*-o" % (options.index_prefix), WHOIS_ORIG_WRITE, max_docs=options.rollover_docs, preserveID=True, add_aliases={WHOIS_ORIG_SEARCH:{}}, bulkOpts=bulk_options, scanOpts=scan_options)
     sys.stdout.write("Done\n")
 
     unOptimizeIndexes(dest_es, data_template)
