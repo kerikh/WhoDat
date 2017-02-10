@@ -531,8 +531,8 @@ def find_entry(es, domainName, options):
         return None
 
 
-def unOptimizeIndexes(es, template, options):
-    if not options.optimize_import:
+def unOptimizeIndexes(es, template, optimize_enabled=True):
+    if not optimize_enabled:
         return
 
     try:
@@ -557,8 +557,8 @@ def unOptimizeIndexes(es, template, options):
     except Exception as e:
         pass
 
-def optimizeIndexes(es, options):
-    if not options.optimize_import:
+def optimizeIndexes(es, optimize_enabled=True):
+    if not optimize_enabled:
         return
 
     try:
@@ -836,7 +836,7 @@ def main():
     options.previousVersion = previousVersion
 
     # Change Index settings to better suit bulk indexing
-    optimizeIndexes(es, options)
+    optimizeIndexes(es, options.optimize_import)
 
     if options.redo is False:
         if options.exclude != "":
@@ -1101,7 +1101,7 @@ def main():
 
         sys.stdout.write("\tFinalizing settings\n")
         # Make sure to de-optimize the indexes for import
-        unOptimizeIndexes(es, data_template, options)
+        unOptimizeIndexes(es, data_template, options.optimize_import)
 
         try:
             work_queue.close()
