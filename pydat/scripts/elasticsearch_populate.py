@@ -590,7 +590,7 @@ def configTemplate(es, data_template, index_prefix):
 
         if index_prefix != "whois":
             del data_template["aliases"]["whois-search"]
-            data_template["alases"]["%s-search" % index_prefix]
+            data_template["aliases"]["%s-search" % index_prefix]
         es.indices.put_template(name='%s-template' % index_prefix, body = data_template)
 
 
