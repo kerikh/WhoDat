@@ -773,32 +773,6 @@ def main():
         options.firstImport = True
 
     else:
-        # Attempt to rollover the existing indices if they're large enough
-        max_docs = options.rollover_docs
-        try:
-            result = es.indices.rollover(alias=WHOIS_ORIG_WRITE,
-                                         body = {"conditions": {
-                                                    "max_docs": max_docs
-                                                 },
-                                                "aliases": {
-                                                    WHOIS_ORIG_SEARCH: {}
-                                                }
-                                         })
-        except Exception as e:
-            print(str(e))
-
-        try:
-            result = es.indices.rollover(alias=WHOIS_DELTA_WRITE,
-                                         body = {"conditions": {
-                                                    "max_docs": max_docs
-                                                 },
-                                                "aliases": {
-                                                    WHOIS_DELTA_SEARCH: {}
-                                                }
-                                         })
-        except:
-            pass
-
         try:
             result = es.get(index=WHOIS_META, id=0)
             if result['found']:
@@ -809,7 +783,35 @@ def main():
             print("Error fetching metadata from index")
             sys.exit(1)
 
-        if options.redo is False: #Identifier is auto-pulled from db, no need to check
+        if not options.redo:
+            # Attempt to rollover the existing indices if they're large enough
+            # To ensure consistency, only do this before importing and not before
+            # a redo.
+            max_docs = options.rollover_docs
+            try:
+                result = es.indices.rollover(alias=WHOIS_ORIG_WRITE,
+                                             body = {"conditions": {
+                                                        "max_docs": max_docs
+                                                     },
+                                                    "aliases": {
+                                                        WHOIS_ORIG_SEARCH: {}
+                                                    }
+                                             })
+            except Exception as e:
+                sys.stderr.write("Unable to issue rollover command: %s\n" % (str(e)))
+
+            try:
+                result = es.indices.rollover(alias=WHOIS_DELTA_WRITE,
+                                             body = {"conditions": {
+                                                        "max_docs": max_docs
+                                                     },
+                                                    "aliases": {
+                                                        WHOIS_DELTA_SEARCH: {}
+                                                    }
+                                             })
+            except:
+                sys.stderr.write("Unable to issue rollover command: %s\n" % (str(e)))
+
             if options.identifier < 1:
                 print("Identifier must be greater than 0")
                 sys.exit(1)
