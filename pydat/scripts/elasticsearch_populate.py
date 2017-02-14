@@ -444,9 +444,9 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
 
             # Add document to delta index
             api_commands.append(process_command(
-                                                'index',
+                                                'create',
                                                 WHOIS_DELTA_WRITE,
-                                                None,
+                                                "%s@%d" % (current_id, current_entry[VERSION_KEY]),
                                                 current_type,
                                                 current_entry
                                 ))

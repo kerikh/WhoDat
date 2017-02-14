@@ -84,6 +84,8 @@ def scanThread(scanFinished, es, source, dest, bulkQueue, preserveID, scanOpts):
 
         if preserveID:
             bulkRequest['_id'] = _id
+        else:
+            bulkRequest['_id'] = '%s@%d' % (_id, _source['dataVersion'])
 
         read_docs += 1
         bulkQueue.put(bulkRequest)
