@@ -21,6 +21,7 @@ from HTMLParser import HTMLParser
 import Queue as queue
 
 import elasticsearch
+from elasticsearch import helpers
 
 STATS = {'total': 0,
          'new': 0,
@@ -130,118 +131,33 @@ def stats_worker(stats_queue):
 
 ###### ELASTICSEARCH PROCESS ######
 
-def es_bulk_shipper_proc(bulk_request_queue, position, options):
+def es_bulk_shipper_proc(insert_queue, position, options):
     os.setpgrp()
 
     global bulkError_event
 
-    es = connectElastic(options.es_uri[position % len(options.es_uri)])
-    while 1:
-        try:
-            bulk_request = bulk_request_queue.get()
-            #sys.stdout.write("Making bulk request\n")
-
+    def bulkIter():
+        while not (finished_event.is_set() and insert_queue.empty()):
             try:
-                resp = es.bulk(body=bulk_request)
-            except Exception as e:
-                with open('/tmp/pydat-bulk-%s-%s.txt' % (options.identifier, uuid.uuid1()), 'wb') as f:
-                    for request in bulk_request:
-                        f.write('%s\n' % json.dumps(request))
-
-                if not bulkError_event.is_set():
-                    bulkError_event.set()
-                    sys.stdout.write("\nErrors making bulk api request!!\nBulk Requests saved to disk (/tmp/pydat-bulk-<identifier>-<random>.txt) and should be submitted manually!!\n")
-                    sys.stdout.write("It is possible you are running too many bulk workers or the bulk size is too big!\n")
-                    sys.stdout.write("ElasticSearch Bulk Syntax (using curl):\n\tcurl -s -XPOST <es_server:port>/_bulk --data-binary @<bulk file name>\n")
-                    sys.stdout.write("Exception: %s\n" % str(e))
-
+                req = insert_queue.get_nowait()
+                insert_queue.task_done()
+            except queue.Empty:
+                time.sleep(.1)
                 continue
 
-            # Handle any errors that arise from making the bulk requests
-            # Some errors are caused by duplicate data, others by ES inconsistency when index refresh is set to a high number
-            # ignore those errors since they shouldn't be too detrimental.
-            try:
-                if 'errors' in resp and resp['errors']:
-                    twoliners = ['create', 'update', 'index']
-                    original_request_position = 0
-                    bulkOut = BytesIO()
+            yield req
 
-                    for item in resp['items']:
-                        key = list(item.keys())[0]
-                        # Only write out those requests that actually failed -- technically requests are idempotent now
-                        # so you could run the entire bulk request again to no ill effect.
-                        # 404's seem to arise from updates or deletes when the record no longer exists usually caused
-                        # by the refresh time or duplicates
-                        # 409's are caused by creates of entries that already exist, either caused by duplicates
-                        # or by refresh issues
-                        if not str(item[key]['status']).startswith('2') and item[key]['status'] not in [404, 409]:
-                            bulkOut.write('%s\n' % json.dumps(bulk_request[original_request_position]))
-                            if key in twoliners:
-                                bulkOut.write("%s\n" % json.dumps(bulk_request[original_request_position + 1]))
-
-                        if key in twoliners:
-                            original_request_position += 2
-                        else:
-                            original_request_position += 1
-
-                    if len(bulkOut.getvalue()) > 0:
-                        with open("/tmp/pydat-bulk-%s-%s.txt" % (options.identifier, uuid.uuid1()), 'wb') as f:
-                            f.write(bulkOut.getvalue())
-
-                        if not bulkError_event.is_set():
-                            bulkError_event.set()
-                            sys.stdout.write("\nErrors making bulk api request!!\nBulk Requests saved to disk (/tmp/pydat-bulk-<identifier>-<random>.txt) and should be submitted manually!!\n")
-                            sys.stdout.write("It is possible you are running too many bulk workers or the bulk size is too big!\n")
-                            sys.stdout.write("ElasticSearch Bulk Syntax (using curl):\n\tcurl -s -XPOST <es_server:port>/_bulk --data-binary @<bulk file name>\n")
-
-                    bulkOut.close()
-            except Exception as e:
-                sys.stdout.write("Unhandled Exception attempting to handle error from bulk import: %s %s\n" % (str(e), traceback.format_exc()))
-            #sys.stdout.write("Bulk request Complete\n")
-        except Exception as e:
-            sys.stdout.write("Exception making bulk request: %s" % str(e))
-        finally:
-            bulk_request_queue.task_done()
-
-def es_serializer_proc(insert_queue, bulk_request_queue, options):
-    #Ignore signals that are sent to parent process
-    #The parent should properly shut this down
-    os.setpgrp()
-
-    global finished_event
-
-    bulk_counter = 0
-    finishup = False
-    bulk_request = []
-
-    while 1:
-        try:
-            request = insert_queue.get_nowait()
-
-            for msg in request:
-                bulk_request.append(msg)
-
-            bulk_counter += 1
-
-            if bulk_counter >= options.bulk_size:
-                bulk_request_queue.put(bulk_request)
-                bulk_counter = 0
-                bulk_request = []
-
-            insert_queue.task_done()
-        except queue.Empty as e:
-            if finished_event.is_set():
-                break
-            time.sleep(.001)
-
-    # Send whatever is left
-    if bulk_counter > 0:
-        bulk_request_queue.put(bulk_request)
-        bulk_counter = 0
-        bulk_request = []
-
-    # Wait for threads to finish sending bulk requests
-    bulk_request_queue.join()
+    es = connectElastic(options.es_uri[position % len(options.es_uri)])
+    try:
+        for (ok, response) in helpers.streaming_bulk(es, bulkIter(), raise_on_error=False):
+            if not ok and response['status'] not in [404, 409]:
+                    if not bulkError_event.is_set():
+                        bulkError_event.set()
+                    sys.stderr.write("Error making bulk request, received error reason: %s\n" % (response['error']['reason']))
+    except Exception as e:
+        sys.stderr.write("Unexpected error processing bulk commands: %s\n%s\n" % (str(e), traceback.format_exc()))
+        if not bulkError_event.is_set():
+            bulkError_event.set()
 
 ######## WORKER THREADS #########
 
@@ -272,7 +188,7 @@ def process_worker(work_queue, insert_queue, stats_queue, options):
 
                     domainName = entry['domainName']
 
-                    if options.firstImport:
+                    if options.firstImport or options.update:
                         current_entry_raw = None
                     else:
                         current_entry_raw = find_entry(es, domainName, options)
@@ -331,6 +247,8 @@ def parse_entry(input_entry, header, options):
     details = {}
     domainName = ''
     for i,item in enumerate(input_entry):
+        if any(header[i].startswith(s) for s in options.ignore_field_prefixes):
+            continue
         if header[i] == 'domainName':
             if options.vverbose:
                 sys.stdout.write("Processing domain: %s\n" % item)
@@ -352,39 +270,41 @@ def parse_entry(input_entry, header, options):
 
 def process_command(request, index, _id, _type, entry = None):
     if request == 'create':
-        command = {"create": {
-                               "_index": index,
-                               "_type": _type
-                             }
+        command = {
+                   "_op_type": "create",
+                   "_index": index,
+                   "_type": _type,
+                   "_id": _id,
+                   "_source": entry
                   }
-        if _id is not None:
-            command['create']['_id'] = _id
-        return (command, entry)
+        return command
     elif request == 'update':
-        command = {"update": {
-                               "_index": index,
-                               "_id": _id,
-                               "_type": _type,
-                             }
+        command = {
+                   "_op_type": "update",
+                   "_index": index,
+                   "_id": _id,
+                   "_type": _type,
                   }
-        return (command, entry)
+        command.update(entry)
+        return command
     elif request == 'delete':
-        command = {"delete": {
-                                "_index": index,
-                                "_id": _id,
-                                "_type": _type,
-                             }
+        command = {
+                    "_op_type": "delete",
+                    "_index": index,
+                    "_id": _id,
+                    "_type": _type,
                   }
-        return (command,)
-    elif request == 'index':
-        command = {"index": {
-                               "_index": index,
-                               "_type": _type
-                             }
+        return command
+    elif request =='index':
+        command = {
+                    "_op_type": "index",
+                    "_index": index,
+                    "_type": _type,
+                    "_source": entry
                   }
         if _id is not None:
-            command['index']['_id'] = _id
-        return (command, entry)
+            command["_id"] = _id
+        return command
 
     return None #TODO raise instead?
 
@@ -485,8 +405,13 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
         entry_id = generate_id(domainName, options.identifier)
         entry[UNIQUE_KEY] = entry_id
         (domain_name_only, tld) = parse_domain(domainName)
+        if options.update:
+            command = 'index' # The index command will create or update
+        else:
+            command = 'create'
+
         api_commands.append(process_command(
-                                            'create',
+                                            command,
                                             WHOIS_ORIG_WRITE,
                                             domain_name_only,
                                             tld,
@@ -607,7 +532,6 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-
     dataSource = parser.add_mutually_exclusive_group(required=True)
     dataSource.add_argument("-f", "--file", action="store", dest="file",
         default=None, help="Input CSV file")
@@ -619,8 +543,14 @@ def main():
     parser.add_argument("-e", "--extension", action="store", dest="extension",
         default='csv', help="When scanning for CSV files only parse files with given extension (default: 'csv')")
 
-    parser.add_argument("-r", "--redo", action="store_true", dest="redo",
-        default=False, help="Attempt to re-import a failed import or import more data, uses stored metatdata from previous import (-o, -n, and -x not required and will be ignored!!)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("-i", "--identifier", action="store", dest="identifier", type=int,
+        default=None, help="Numerical identifier to use in update to signify version (e.g., '8' or '20140120')")
+    mode.add_argument("-r", "--redo", action="store_true", dest="redo",
+        default=False, help="Attempt to re-import a failed import or import more data, uses stored metadata from previous import (-o, -n, and -x not required and will be ignored!!)")
+    mode.add_argument("-z", "--update", action= "store_true", dest="update",
+        default=False, help = "Run the script in update mode. Intended for taking daily whois data and adding new domains to the current existing index in ES. No new indexss created. If delta-indexes are also enabled, a delta index will only be created when an entry has been modified and has a previously existing entry.")
+
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose",
         default=False, help="Be verbose")
     parser.add_argument("--vverbose", action="store_true", dest="vverbose",
@@ -640,8 +570,6 @@ def main():
         default=['localhost:9200'], help="Location(s) of ElasticSearch Server (e.g., foo.server.com:9200) Can take multiple endpoints")
     parser.add_argument("-p", "--index-prefix", action="store", dest="index_prefix",
         default='whois', help="Index prefix to use in ElasticSearch (default: whois)")
-    parser.add_argument("-i", "--identifier", action="store", dest="identifier", type=int,
-        default=None, help="Numerical identifier to use in update to signify version (e.g., '8' or '20140120')")
     parser.add_argument("-B", "--bulk-size", action="store", dest="bulk_size", type=int,
         default=5000, help="Size of Bulk Elasticsearch Requests")
     parser.add_argument("--optimize-import", action="store_true", dest="optimize_import",
@@ -651,10 +579,10 @@ def main():
 
     parser.add_argument("-t", "--threads", action="store", dest="threads", type=int,
         default=2, help="Number of workers, defaults to 2. Note that each worker will increase the load on your ES cluster since it will try to lookup whatever record it is working on in ES")
-    parser.add_argument("--bulk-serializers", action="store", dest="bulk_serializers", type=int,
-        default=1, help="How many threads to spawn to combine messages from workers. Only increase this if you're are running a lot of workers and one cpu is unable to keep up with the load")
     parser.add_argument("--bulk-threads", action="store", dest="bulk_threads", type=int,
         default=1, help="How many threads to spawn to send bulk ES messages. The larger your cluster, the more you can increase this")
+    parser.add_argument("--ignore-field-prefixes", nargs='*',dest="ignore_field_prefixes", type=str,
+        default=['zoneContact','billingContact','technicalContact'], help="list of fields (in whois data) to ignore when extracting and inserting into ElasticSearch")
 
     options = parser.parse_args()
 
@@ -663,10 +591,15 @@ def main():
 
     options.firstImport = False
 
+    #as these are crafted as optional args, but are really a required mutually exclusive group, must check that one is specified
+    if not (options.identifier or options.redo or options.update):
+        print("Please select a script mode: Insert , Redo, or Update")
+        parser.parse_args(["-h"])
+
     threads = []
+
     work_queue = jmpQueue(maxsize=options.bulk_size * options.threads)
     insert_queue = jmpQueue(maxsize=options.bulk_size * options.bulk_threads)
-    bulk_request_queue = jmpQueue(maxsize = 2 * options.bulk_threads)
     stats_queue = mpQueue()
 
     global WHOIS_META, WHOIS_ORIG_WRITE, WHOIS_DELTA_WRITE, WHOIS_ORIG_SEARCH, WHOIS_DELTA_SEARCH, WHOIS_SEARCH
@@ -710,20 +643,14 @@ def main():
         configTemplate(es, data_template, options.index_prefix)
         sys.exit(0)
 
-    if options.identifier is None and options.redo is False:
-        print("Identifier required\n")
-        argparse.parse_args(['-h'])
-    elif options.identifier is not None and options.redo is True:
-        print("Redo requested and Identifier Specified. Please choose one or the other\n")
-        argparse.parse_args(['-h'])
-
+    es = connectElastic(options.es_uri)
     metadata = None
     previousVersion = 0
 
     #Create the metadata index if it doesn't exist
     if not es.indices.exists(WHOIS_META):
-        if options.redo:
-            print("Cannot redo when no initial data exists")
+        if options.redo or options.update:
+            print("Script cannot conduct a redo or update when no initial data exists")
             sys.exit(1)
 
         configTemplate(es, data_template, options.index_prefix)
@@ -783,7 +710,7 @@ def main():
             print("Error fetching metadata from index")
             sys.exit(1)
 
-        if not options.redo:
+        if options.identifier is not None:
             # Attempt to rollover the existing indices if they're large enough
             # To ensure consistency, only do this before importing and not before
             # a redo.
@@ -819,7 +746,8 @@ def main():
                 print("Identifier must be 'greater than' previous identifier")
                 sys.exit(1)
 
-        else:
+            previousVersion = metadata['lastVersion']
+        else: # redo or update
             result = es.search(index=WHOIS_META,
                                body = { "query": {
                                             "match_all": {}
@@ -840,7 +768,67 @@ def main():
     # Change Index settings to better suit bulk indexing
     optimizeIndexes(es, options.optimize_import)
 
-    if options.redo is False:
+
+    # Redo or Update Mode
+    if options.redo or options.update:
+        # Get the record for the attempted import
+        options.identifier = int(metadata['lastVersion'])
+        try:
+            previous_record = es.get(index=meta_index_name, id=options.identifier)['_source']
+        except:
+           print("Unable to retrieve information for last import")
+           sys.exit(1)
+
+        if 'excluded_keys' in previous_record:
+            options.exclude = previous_record['excluded_keys']
+        else:
+            options.exclude = None
+
+        if 'included_keys' in previous_record:
+            options.include = previous_record['included_keys']
+        else:
+            options.include = None
+
+        options.comment = previous_record['comment']
+        STATS['total'] = int(previous_record['total'])
+        STATS['new'] = int(previous_record['new'])
+        STATS['updated'] = int(previous_record['updated'])
+        STATS['unchanged'] = int(previous_record['unchanged'])
+        STATS['duplicates'] = int(previous_record['duplicates'])
+        CHANGEDCT = previous_record['changed_stats']
+
+        if options.verbose:
+            if options.redo:
+                print("Re-importing for: \n\tIdentifier: %s\n\tComment: %s" % (options.identifier, options.comment))
+            else:
+                print("Updating for: \n\tIdentifier: %s\n\tComment: %s" % (options.identifier, options.comment))
+
+        for ch in CHANGEDCT.keys():
+            CHANGEDCT[ch] = int(CHANGEDCT[ch])
+
+        #Start the reworker threads
+        if options.verbose:
+            print("Starting %i %s threads" % (options.threads, "reworker" if options.redo else "update"))
+
+        if options.redo:
+            target = process_reworker
+        else:
+            target = process_worker
+
+        for i in range(options.threads):
+            t = Process(target=target,
+                        args=(work_queue,
+                              insert_queue,
+                              stats_queue,
+                              options),
+                        name='Worker %i' % i)
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        #No need to update lastVersion or create metadata entry
+
+    #Insert(normal) Mode
+    else:
         if options.exclude != "":
             options.exclude = options.exclude.split(',')
         else:
@@ -888,71 +876,13 @@ def main():
             
         es.create(index=WHOIS_META, id=options.identifier, doc_type='meta',  body = meta_struct)
 
-    else: #redo is True
-        #Get the record for the attempted import
-        options.identifier = int(metadata['lastVersion'])
-        try:
-            redo_record = es.get(index=WHOIS_META, id=options.identifier)['_source']
-        except:
-           print("Unable to retrieve information for last import")
-           sys.exit(1) 
-
-        if 'excluded_keys' in redo_record:
-            options.exclude = redo_record['excluded_keys']
-        else:
-            options.exclude = None
-
-        if 'included_keys' in redo_record:
-            options.include = redo_record['included_keys']
-        else:
-            options.include = None
-
-        options.comment = redo_record['comment']
-        STATS['total'] = int(redo_record['total'])
-        STATS['new'] = int(redo_record['new'])
-        STATS['updated'] = int(redo_record['updated'])
-        STATS['unchanged'] = int(redo_record['unchanged'])
-        STATS['duplicates'] = int(redo_record['duplicates'])
-        CHANGEDCT = redo_record['changed_stats']
-
-        if options.verbose:
-            print("Re-importing for: \n\tIdentifier: %s\n\tComment: %s" % (options.identifier, options.comment))
-
-        for ch in CHANGEDCT.keys():
-            CHANGEDCT[ch] = int(CHANGEDCT[ch])
-
-        #Start the reworker threads
-        if options.verbose:
-            print("Starting %i reworker threads" % options.threads)
-
-        for i in range(options.threads):
-            t = Process(target=process_reworker,
-                        args=(work_queue, 
-                              insert_queue, 
-                              stats_queue,
-                              options), 
-                        name='Worker %i' % i)
-            t.daemon = True
-            t.start()
-            threads.append(t)
-        #No need to update lastVersion or create metadata entry
-
-    # Start up the Elasticsearch Bulk Serializers
-    # Its job is just to combine work into bulk-sized chunks to be sent to the bulk API
-    # One serializer should be enough for a lot of workers, but anyone with a super large cluster might
-    # be able to run a lot of workers which can subsequently overwhelm a single serializer
-    es_serializers = []
-    for i in range(options.bulk_serializers):
-        es_serializer = Process(target=es_serializer_proc, args=(insert_queue, bulk_request_queue, options))
-        es_serializer.start()
-        es_serializers.append(es_serializer)
 
     # Start up ES Bulk Shippers, each in their own process
     # As far as I can tell there's an issue (bug? feature?) that causes every request made to ES to hinder the entire process even if it's in a separate python thread
     # not sure if this is GIL related or not, but instead of debugging how the elasticsearch library or urllib does things
     # its easier to just spawn a separate process for every connection being made to ES
     for i in range(options.bulk_threads):
-        es_bulk_shipper = Process(target=es_bulk_shipper_proc, args=(bulk_request_queue, i, options))
+        es_bulk_shipper = Process(target=es_bulk_shipper_proc, args=(insert_queue, i, options))
         es_bulk_shipper.daemon = True
         es_bulk_shipper.start()
 
@@ -995,13 +925,6 @@ def main():
             finished_event.set()
             for t in threads:
                 t.join()
-
-            # Wait for the es serializer(s) to package up all of the bulk requests
-            for es_serializer in es_serializers:
-                es_serializer.join()
-
-            # Wait for shippers to send all bulk requests
-            bulk_request_queue.join()
 
             # Change settings back
             unOptimizeIndexes(es, data_template, options)
@@ -1073,13 +996,7 @@ def main():
         stats_worker_thread.join()
 
         sys.stdout.write("\tWaiting for ElasticSearch bulk uploads to finish ... \n")
-        # The ES serializer does not recognize the shutdown event only the graceful finished_event
-        # so set the event so it can gracefully shutdown
         finished_event.set()
-
-        # Wait for es serializer(s) to package up all bulk requests
-        for es_serializer in es_serializers:
-            es_serializer.join()
 
         # Wait for shippers to send all bulk requests, otherwise ES might be left in an inconsistent state
         bulk_request_queue.join()
