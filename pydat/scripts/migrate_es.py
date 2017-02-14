@@ -58,12 +58,15 @@ def bulkThread(scanFinished, des, dest, bulkQueue, add_aliases, max_docs, bulkOp
 
             yield req
 
-    for success, response in helpers.parallel_bulk(des, bulkIter(), thread_count=bulkOpts['threads'], chunk_size=bulkOpts['size']):
-        written_docs += 1
-        if not success:
-            sys.stdout.write("Error: %s\n" % response)
-        if (max_docs is not None) and (written_docs % max_docs == 0):
-            rollOverAlias(des, dest, add_aliases, max_docs)
+    try:
+        for success, response in helpers.parallel_bulk(des, bulkIter(), raise_on_error=False, thread_count=bulkOpts['threads'], chunk_size=bulkOpts['size']):
+            written_docs += 1
+            if not success:
+                sys.stdout.write("Error: %s\n" % str(response))
+            if (max_docs is not None) and (written_docs % max_docs == 0):
+                rollOverAlias(des, dest, add_aliases, max_docs)
+    except Exception as e:
+        sys.stdout.write("Unexpected error making bulk request(s): %s\n" % (str(e)))
 
 def scanThread(scanFinished, es, source, dest, bulkQueue, preserveID, scanOpts):
     global read_docs
