@@ -630,14 +630,18 @@ def main():
         sys.exit(1)
 
     try:
-        es_version = [int(i) for i in es.cat.nodes(h='version').split('.')]
+        es_versions = []
+        for version in es.cat.nodes(h='version').strip().split('\n'):
+            es_versions.append([int(i) for i in version.split('.')])
     except Exception as e:
-        print("Unable to retrieve ElasticSearch version ... %s" % (str(e)))
+        sys.stderr.write("Unable to retrieve destination ElasticSearch version ... %s\n" % (str(e)))
         sys.exit(1)
 
-    if es_version[0] < 5 or (es_version[0] >= 5 and es_version[1] < 2):
-        print("ElasticSearch version must be 5.2 or greater")
-        sys.exit(1)
+    for version in es_versions:
+        if version[0] < 5 or (version[0] >= 5 and version[1] < 2):
+            sys.stderr.write("Destination ElasticSearch version must be 5.2 or greater\n")
+            sys.exit(1)
+
 
 
     if options.config_template_only:
