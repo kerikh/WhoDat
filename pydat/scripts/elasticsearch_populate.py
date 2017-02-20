@@ -779,7 +779,7 @@ def main():
         # Get the record for the attempted import
         options.identifier = int(metadata['lastVersion'])
         try:
-            previous_record = es.get(index=meta_index_name, id=options.identifier)['_source']
+            previous_record = es.get(index=WHOIS_META, id=options.identifier)['_source']
         except:
            print("Unable to retrieve information for last import")
            sys.exit(1)
