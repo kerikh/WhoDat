@@ -703,6 +703,8 @@ def main():
             print("Error fetching metadata from index")
             sys.exit(1)
 
+        options.enable_delta_indexes = bool(metadata['deltaIndexes'])
+
         #Redo or Update Mode
         if options.redo or options.update:
             result = es.search(index=meta_index_name,
