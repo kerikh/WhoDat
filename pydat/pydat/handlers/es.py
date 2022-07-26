@@ -10,10 +10,10 @@ class ElasticsearchError(Exception):
 
 def es_connector():
     try:
-        es = Elasticsearch(settings.ES_URI,
-                           max_retries=100,
-                           retry_on_timeout=True)
-        return es
+        return Elasticsearch(
+            settings.ES_URI, max_retries=100, retry_on_timeout=True
+        )
+
     except:
         raise
 
@@ -23,7 +23,7 @@ def record_count():
     except:
         raise
 
-    records = es.cat.count(index='%s-*' % settings.ES_INDEX_PREFIX, h="count")
+    records = es.cat.count(index=f'{settings.ES_INDEX_PREFIX}-*', h="count")
 
     return int(records)
 
@@ -61,7 +61,7 @@ def cluster_stats():
             }
     #TODO XXX need to cache this but query_cache doesn't seem to be a parameter to this function
     #Might need to set query cache in the mapping instead
-    results = es.search(index = '%s-*' % settings.ES_INDEX_PREFIX, body = query)
+    results = es.search(index=f'{settings.ES_INDEX_PREFIX}-*', body = query)
 
     stats = {
             'domainStats': {},
@@ -70,7 +70,7 @@ def cluster_stats():
 
     for bucket in results['aggregations']['type']['buckets']:
         stats['domainStats'][bucket['key']] = (bucket['doc_count'], bucket['unique']['value'])
-   
+
     for bucket in results['aggregations']['created']['dates']['buckets']:
         date_label = "/".join(bucket['key_as_string'].split('-'))
         if date_label not in stats['histogram']:
@@ -99,11 +99,11 @@ def cluster_health():
 def lastVersion():
     try:
         es = es_connector()
-        result = es.get(index='@%s_meta' % settings.ES_INDEX_PREFIX, id=0)
+        result = es.get(index=f'@{settings.ES_INDEX_PREFIX}_meta', id=0)
         if result['found']:
             return result['_source']['lastVersion']
         else:
-            raise 
+            raise
     except ElasticsearchError as e:
         return -1
 
@@ -112,7 +112,7 @@ def metadata(version = None):
     results = {'success': False}
     try:
         es = es_connector()
-        index = '@%s_meta' % settings.ES_INDEX_PREFIX
+        index = f'@{settings.ES_INDEX_PREFIX}_meta'
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
@@ -120,33 +120,21 @@ def metadata(version = None):
     if version is None:
         res = es.search(index=index, body={"query": {"match_all": {}},"sort": "metadata"})
         if res['hits']['total'] > 0:
-            newres = []
-            for r in res['hits']['hits']:
-               newres.append(r['_source']) 
+            newres = [r['_source'] for r in res['hits']['hits']]
             res = newres
         else:
             res = []
     else:
         version = int(version)
         res = es.get(index=index, id=version)
-        if res['found']:
-            res = [res['_source']]
-        else:
-            res = []
-
-
-    results['data'] = []
-    for r in res:
-        results['data'].append(r)
-    
+        res = [res['_source']] if res['found'] else []
+    results['data'] = list(res)
     results['success'] = True
     return results
     
 
 def formatSort(colID, direction):
     sort_key = None
-    sort_dir = "asc"
-
     if(colID == 1):
         sort_key = "domainName"
     elif(colID == 2):
@@ -160,27 +148,22 @@ def formatSort(colID, direction):
     elif(colID == 6):
         sort_key = "dataVersion"
 
-    if direction == "desc":
-        sort_dir = "desc"
-
-    if sort_key is None:
-        return None
-
-    return (sort_key, sort_dir)
+    sort_dir = "desc" if direction == "desc" else "asc"
+    return None if sort_key is None else (sort_key, sort_dir)
     
 
 def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
     results = {'success': False}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
+        index = f'{settings.ES_INDEX_PREFIX}-*'
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
 
 
     if key != settings.SEARCH_KEYS[0][0]:
-        key = 'details.' + key
+        key = f'details.{key}'
     #All data in ES is lowercased (during ingestion/analysis) and we're using a term filter to take
     #advantage of filter caching, we could probably use a match query instead, but these seems more
     #efficient
@@ -190,17 +173,13 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
     version_filter = None
 
     if low is not None:
-        if low == high or high is None: # single version
-            try:
+        try:
+            if low == high or high is None:
                 version_filter = {"term": {'dataVersion': int(low)}}
-            except: #TODO XXX
-                pass
-        elif high is not None:
-            try:
+            else:
                 version_filter = {"range": {"dataVersion": {"gte": int(low), "lte": int(high)}}}
-            except: #TODO XXX
-                pass 
-
+        except: #TODO XXX
+            pass
     if version_filter is not None:
         final_filter = { "and": [query_filter, version_filter] }
     else:
@@ -210,7 +189,7 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
 
     if sfilter is not None:
         try:
-            regx = ".*%s.*" % sfilter
+            regx = f".*{sfilter}.*"
         except:
             results['aaData'] = []
             results['iTotalRecords'] = record_count()
@@ -222,10 +201,7 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
             for skey in [keys[0] for keys in settings.SEARCH_KEYS]:
                 if skey == key: #Don't bother filtering on the key field
                     continue
-                if skey != settings.SEARCH_KEYS[0][0]:
-                    snkey = 'details.' + skey
-                else:
-                    snkey = skey
+                snkey = f'details.{skey}' if skey != settings.SEARCH_KEYS[0][0] else skey
                 exp = {
                         'regexp': {
                             snkey: {
@@ -250,17 +226,14 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
     }
 
     if len(sortset) > 0:
-        sorter = []
-        for s in sortset:
-            sorter.append({s[0]: {"order": s[1]}})
-
+        sorter = [{s[0]: {"order": s[1]}} for s in sortset]
         query["sort"] = sorter
 
 
     if settings.DEBUG:
         sys.stdout.write("%s\n" % str(query))
 
-    domains = es.search(index='%s-*' % settings.ES_INDEX_PREFIX, body = query)
+    domains = es.search(index=f'{settings.ES_INDEX_PREFIX}-*', body = query)
 
     results['aaData'] = []
     #Total Records in all indices 
@@ -326,12 +299,10 @@ def advDataTableSearch(query, skip, pagesize, unique = False):
     if not settings.ES_SCRIPTING_ENABLED:
         unique = False
 
-    results = {'success': False}
-    results['aaData'] = []
-
+    results = {'success': False, 'aaData': []}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
+        index = f'{settings.ES_INDEX_PREFIX}-*'
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
@@ -346,11 +317,16 @@ def advDataTableSearch(query, skip, pagesize, unique = False):
         import json
         sys.stdout.write(json.dumps(q))
     try:
-        domains = es.search(index='%s-*' % settings.ES_INDEX_PREFIX, body = q, search_type = 'dfs_query_then_fetch')
+        domains = es.search(
+            index=f'{settings.ES_INDEX_PREFIX}-*',
+            body=q,
+            search_type='dfs_query_then_fetch',
+        )
+
     except Exception as e:
         results['message'] = str(e)
         return results    
-    
+
     if 'error' in domains:
         results['message'] = 'Error'
         return results
@@ -370,7 +346,6 @@ def advDataTableSearch(query, skip, pagesize, unique = False):
                             pdomain['dataVersion'], "%.2f" % round(domain['_score'], 2)]
                 results['aaData'].append(dom_arr)
 
-        results['success'] = True
     else:
         buckets = domains['aggregations']['domains']['buckets']
         results['iTotalDisplayRecords'] = len(buckets)
@@ -386,8 +361,7 @@ def advDataTableSearch(query, skip, pagesize, unique = False):
                         pdomain['dataVersion'], "%.2f" % round(domain['sort'][0], 2)] # For some reason the _score goes away in the aggregations if you sort by it
             results['aaData'].append(dom_arr)
 
-        results['success'] = True
-
+    results['success'] = True
     return results
 
     
@@ -396,13 +370,13 @@ def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None,
     results = {'success': False}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
+        index = f'{settings.ES_INDEX_PREFIX}-*'
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
 
     if key != settings.SEARCH_KEYS[0][0]:
-        key = 'details.' + key
+        key = f'details.{key}'
     value = value.lower()
 
 
@@ -411,23 +385,19 @@ def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None,
     if filt == 'domainName':
         es_source = ['domainName']
     elif filt != None:
-        es_source = ['details.' + filt]
+        es_source = [f'details.{filt}']
 
     query_filter = {"term": {key: value}}
     version_filter = None
 
     if low is not None:
-        if low == high or high is None: # single version
-            try:
+        try:
+            if low == high or high is None:
                 version_filter = {"term": {'dataVersion': int(low)}}
-            except: #TODO XXX
-                pass
-        elif high is not None:
-            try:
+            else:
                 version_filter = {"range": {"dataVersion": {"gte": int(low), "lte": int(high)}}}
-            except: #TODO XXX
-                pass 
-
+        except: #TODO XXX
+            pass
     if version_filter is not None:
         final_filter = { "and": [query_filter, version_filter] }
     else:
@@ -451,7 +421,7 @@ def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None,
     #XXX DEBUG CODE
     import sys
     sys.stdout.write("%s\n" % str(query))
-    domains = es.search(index='%s-*' % settings.ES_INDEX_PREFIX, body = query)
+    domains = es.search(index=f'{settings.ES_INDEX_PREFIX}-*', body = query)
 
     results['total'] = domains['hits']['total']
     results['data'] = []
@@ -488,7 +458,7 @@ def advanced_search(search_string, skip = 0, size = 20, unique = False): #TODO X
     results = {'success': False}
     try:
         es = es_connector()
-        index = '%s-*' % settings.ES_INDEX_PREFIX
+        index = f'{settings.ES_INDEX_PREFIX}-*'
     except ElasticsearchError as e:
         results['message'] = str(e)
         return results
@@ -500,7 +470,12 @@ def advanced_search(search_string, skip = 0, size = 20, unique = False): #TODO X
         return results
 
     try:
-        domains = es.search(index='%s-*' % settings.ES_INDEX_PREFIX, body = query, search_type='dfs_query_then_fetch')
+        domains = es.search(
+            index=f'{settings.ES_INDEX_PREFIX}-*',
+            body=query,
+            search_type='dfs_query_then_fetch',
+        )
+
     except Exception as e:
         results['message'] = str(e)
         return results
@@ -523,8 +498,6 @@ def advanced_search(search_string, skip = 0, size = 20, unique = False): #TODO X
 
         results['avail'] = len(results['data'])
         results['skip'] = skip
-        results['page_size'] = size
-        results['success'] = True
     else:
         buckets = domains['aggregations']['domains']['buckets']
         results['total'] = len(buckets)
@@ -544,10 +517,9 @@ def advanced_search(search_string, skip = 0, size = 20, unique = False): #TODO X
             results['data'].append(pdomain)
 
         results['avail'] = len(buckets)
-        results['skip'] = 0 
-        results['page_size'] = size
-        results['success'] = True
-
+        results['skip'] = 0
+    results['page_size'] = size
+    results['success'] = True
     return results
 
 

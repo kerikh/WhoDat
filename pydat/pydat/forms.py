@@ -26,8 +26,10 @@ class domain_form(forms.Form):
         self.fields['filt'].choices = settings.SEARCH_KEYS
 
         for field in self.fields.values():
-            field.error_messages = {'required':'%s is required' % field.label, 
-                                    'invalid_choice': '%s is invalid' % field.label}
+            field.error_messages = {
+                'required': f'{field.label} is required',
+                'invalid_choice': f'{field.label} is invalid',
+            }
 
     def clean_latest(self):
         if 'latest' not in self.cleaned_data or self.cleaned_data['latest'] is None:
@@ -67,8 +69,10 @@ class advdomain_form(forms.Form):
         self.fields['filt'].choices = settings.SEARCH_KEYS
 
         for field in self.fields.values():
-            field.error_messages = {'required':'%s is required' % field.label, 
-                                    'invalid_choice': '%s is invalid' % field.label}
+            field.error_messages = {
+                'required': f'{field.label} is required',
+                'invalid_choice': f'{field.label} is invalid',
+            }
 
     def clean_unique(self):
         if 'unique' not in self.cleaned_data or self.cleaned_data['unique'] is None:
@@ -85,7 +89,7 @@ class advdomain_form(forms.Form):
             raise forms.ValidationError("Unable to unquote query")
         result = handler.test_query(query)
         if result is not None:
-            raise forms.ValidationError("Unable to parse query: %s" % result) 
+            raise forms.ValidationError(f"Unable to parse query: {result}")
         return query
 
 #Allows you to provide a drop down of numbers but support non listed number
@@ -139,8 +143,10 @@ class pdns_super(forms.Form):
         self.initial['rrtypes'] = [settings.RRTYPE_KEYS[0][0]]
 
         for field in self.fields.values():
-            field.error_messages = {'required':'%s is required' % field.label,
-                                    'invalid_choice': '%s is invalid' % field.label}
+            field.error_messages = {
+                'required': f'{field.label} is required',
+                'invalid_choice': f'{field.label} is invalid',
+            }
 
     def clean_absolute(self):
         if 'absolute' not in self.cleaned_data or self.cleaned_data['absolute'] is None:
@@ -189,7 +195,7 @@ class pdns_r_form(pdns_super):
     def clean_value(self):
         if 'key' not in self.cleaned_data:
             raise forms.ValidationError('Unable to parse query')
-    
+
         key = self.cleaned_data['key']
         value = self.cleaned_data['value']
         if key == "ip": 
@@ -251,6 +257,6 @@ def validate_hex(input_hex):
     except:
         return None
     if len(output_hex) % 2 == 1: #make hex string always pairs of hex values
-        output_hex = "0" + output_hex
+        output_hex = f"0{output_hex}"
 
     return output_hex

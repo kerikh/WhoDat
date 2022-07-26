@@ -13,7 +13,7 @@ from pydat.handlers import passive
 def __renderErrorResponse__(request, view, message, data=None):
     d = {'error': message}
     if data is not None:
-        d.update(data)
+        d |= data
 
     context = __createRequestContext__(d)
     return render(request, view, context=context)
@@ -22,7 +22,7 @@ def __renderErrorResponse__(request, view, message, data=None):
 def __renderErrorPage__(request, message, data = None):
     d = {'error' : message}
     if data is not None:
-        d.update(data)
+        d |= data
 
     context = __createRequestContext__(d)
     return render(request, 'error.html', context=context)
@@ -49,7 +49,7 @@ def __createRequestContext__(data=None):
         ctx_var['scripting'] = settings.ES_SCRIPTING_ENABLED
 
     if data is not None:
-        ctx_var.update(data)
+        ctx_var |= data
         if 'active' not in data:
             if 'pdns_form' in data:
                 ctx_var['active'] = 1
@@ -61,10 +61,7 @@ def __createRequestContext__(data=None):
     return ctx_var
 
 def index(request):
-    if settings.HANDLER == 'es':
-        legacy = False
-    else:
-        legacy = True
+    legacy = settings.HANDLER != 'es'
     context = __createRequestContext__(data = { 'legacy_search': legacy})
     return render(request, 'domain.html', context=context)
 
@@ -82,10 +79,6 @@ def stats(request):
     if allversions['success']:
         lastimport = allversions['data'][-1]
         lastten = allversions['data'][-10:]
-    else:
-        #XXX TODO returne error
-        pass
-
     if lastten[0]['metadata'] == 0:
         lastten = lastten[1:]
 
@@ -97,9 +90,8 @@ def stats(request):
 
 def help(request):
     try:
-        f = open(settings.SITE_ROOT + "/../README.md")
-        helptxt = f.read()
-        f.close()
+        with open(f"{settings.SITE_ROOT}/../README.md") as f:
+            helptxt = f.read()
     except:
         helptxt = "Unable to render help text."
 
@@ -139,7 +131,7 @@ def advdomains(request):
     else:
         query_unique = 'false'
 
-    
+
     if fmt == 'normal':
         context = __createRequestContext__(data = { 'search_string': urllib.quote(search_string) or '',
                                                              'query_unique': query_unique,
@@ -155,14 +147,8 @@ def advdomains(request):
         except:
             limit = settings.LIMIT
 
-        filt = None
-        if fmt == 'list': #Only filter if a list was requested
-            filt = filt_key
-
-        if query_unique == 'true':
-            query_unique = True
-        else:
-            query_unique = False
+        filt = filt_key if fmt == 'list' else None
+        query_unique = query_unique == 'true'
         results = handler.advanced_search(search_string, 0, limit, query_unique)
         if not results['success']:
             #return __renderErrorPage__(request, results['message'])
@@ -201,26 +187,21 @@ def domains(request, key=None, value=None):
     filt_key = search_f.cleaned_data['filt']
     fmt = search_f.cleaned_data['fmt']
     limit = int(search_f.cleaned_data.get('limit', settings.LIMIT))
-    latest = search_f.cleaned_data['latest']
-
-    if latest:
+    if latest := search_f.cleaned_data['latest']:
         low_version = handler.lastVersion()
         high_version = low_version
     else:
         low_version = None
         high_version = None
-    
-    filt = None
-    if fmt == 'list': #Only filter if a list was requested
-        filt = filt_key
 
+    filt = filt_key if fmt == 'list' else None
     #All web searches are AJAXy
     if fmt == "normal":
         low_version_js = low_version
         high_version_js = high_version
-        if low_version == None:
+        if low_version_js is None:
             low_version_js = 'null'
-        if high_version == None:
+        if high_version is None:
             high_version_js = 'null'
         context = __createRequestContext__(data = { 'key': urllib.quote(key),
                                                              'value': urllib.quote(value),
@@ -278,14 +259,13 @@ def pdns(request, domain = None):
 
     results = passive.request_pdns(domain, absolute, rrtypes, limit, pretty)
     if fmt == 'normal':
-        if results['success']:
-            context = __createRequestContext__({'results': results,
-                                                         'inverse': False,
-                                                         'pdns_form': pdns_f,
-                                                        })
-            return render(request, 'pdns_results.html', context=context)
-        else:
+        if not results['success']:
             return __renderErrorPage__(request, results['error'], {'pdns_form': pdns_f})
+        context = __createRequestContext__({'results': results,
+                                                     'inverse': False,
+                                                     'pdns_form': pdns_f,
+                                                    })
+        return render(request, 'pdns_results.html', context=context)
     elif fmt == 'json':
         return HttpResponse(json.dumps(results), content_type='application/json')
     elif fmt == 'list':
@@ -338,11 +318,10 @@ def pdns_r(request, key = None, value = None):
 
     results = passive.request_pdns_reverse(key, value, rrtypes, limit, pretty)
     if fmt == 'normal':
-        if results['success']:
-            context = __createRequestContext__({'results': results, 'inverse': True, 'pdns_r_form': pdns_r_f})
-            return render(request, 'pdns_results.html', context=context)
-        else:
+        if not results['success']:
             return __renderErrorPage__(request, results['error'], {'pdns_r_form':pdns_r_f})
+        context = __createRequestContext__({'results': results, 'inverse': True, 'pdns_r_form': pdns_r_f})
+        return render(request, 'pdns_results.html', context=context)
     elif fmt == 'json':
         return HttpResponse(json.dumps(results), content_type='application/json')
     elif fmt == 'list':

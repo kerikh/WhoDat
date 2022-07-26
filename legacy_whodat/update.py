@@ -21,27 +21,35 @@ def updatesearch(date):
 	client = MongoClient()
 	whoisColl = client['test']['whois']
 	emails = [line.strip() for line in open(registrantpath, 'r')]
-	outfile = open( updatepath + "newdomains.txt", 'w')
-	outfile.write("     WhoDat Known Bad Registrant Alert\n")
-	outfile.write("     ------------"+date+"-----------\n\n")
-	outfile.write("Registrant Email   Current IP   Domain Name \n")
-	count = 0 
-	for email in emails:
-		for domain in whoisColl.find({u"contactEmail":email, u"standardRegCreatedDate":{'$regex': date+".*"}}):
-			try:
-				data = socket.gethostbyname(domain[u'domainName'])
-				ip = str(data)
-			except Exception:
-				ip = "No DNS Record"
-			outfile.write(domain[u'contactEmail'] + "  "+ ip + "  " + domain[u'domainName'] +  "\n")
-			count += 1 
-	outfile.close()
+	with open(f"{updatepath}newdomains.txt", 'w') as outfile:
+		outfile.write("     WhoDat Known Bad Registrant Alert\n")
+		outfile.write(f"     ------------{date}" + "-----------\n\n")
+		outfile.write("Registrant Email   Current IP   Domain Name \n")
+		count = 0
+		for email in emails:
+			for domain in whoisColl.find({u"contactEmail": email, u"standardRegCreatedDate": {'$regex': f"{date}.*"}}):
+				try:
+					data = socket.gethostbyname(domain[u'domainName'])
+					ip = str(data)
+				except Exception:
+					ip = "No DNS Record"
+				outfile.write(domain[u'contactEmail'] + "  "+ ip + "  " + domain[u'domainName'] +  "\n")
+				count += 1
 	if count > 0:
 		if pgp == False:
 			os.system('mail  -s "WhoDat Registration Alert ( '+ date+' )" '+ notifyemail +' -- -f '+ sendingemail+ ' < ' + updatepath + 'newdomains.txt')
 		else:
-			os.system('gpg --trust-model always -ea -r '+ notifyemail +' -o - ' + updatepath + 'newdomains.txt  | mail  -s "WhoDat Registration Alert ( '+ date+' )" '+ notifyemail +' -- -f '+ sendingemail)	
-	os.remove('' + updatepath + 'newdomains.txt')
+			os.system(
+				f'gpg --trust-model always -ea -r {notifyemail} -o - {updatepath}'
+				+ 'newdomains.txt  | mail  -s "WhoDat Registration Alert ( '
+				+ date
+				+ ' )" '
+				+ notifyemail
+				+ ' -- -f '
+				+ sendingemail
+			)
+
+	os.remove(f'{updatepath}newdomains.txt')
 
 def downloads(date):
 	for tld in tlds:
@@ -66,7 +74,7 @@ def downloads(date):
 
 def unzip(date):
 	for tld in tlds:
-		os.system('gunzip' + updatepath +date+tld+'.csv.gz')
+		os.system(f'gunzip{updatepath}{date}{tld}.csv.gz')
 
 def cropfile(date):
 	for tld in tlds:
@@ -74,7 +82,9 @@ def cropfile(date):
 
 def insertfile(date):
 	for tld in tlds:
-		os.system('mongoimport --collection whois --file ' + updatepath+ date + tld +'.done.csv  --type csv --headerline --upsert --upsertFields domainName')
+		os.system(
+			f'mongoimport --collection whois --file {updatepath}{date}{tld}.done.csv  --type csv --headerline --upsert --upsertFields domainName'
+		)
 
 def deletefiles(date):
 	for file in os.listdir(updatepath):

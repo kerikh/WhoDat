@@ -7,19 +7,15 @@ from django.conf import settings
 
 
 def __request_pdns_dnsdb(domain, absolute, rrtypes, limit, pretty):
-    results = {'success': False, 'type': 'DNSDB'}
-
     # If 'any' is in rrtypes and anything else too, just default to 'any'
     if 'any' in rrtypes and len(rrtypes) >= 2:
         rrtypes = ['any']
 
-    results['data'] = {}
-
-    wildcard = "*."
-    if absolute:
-        wildcard = ""
+    results = {'success': False, 'type': 'DNSDB', 'data': {}}
+    wildcard = "" if absolute else "*."
     for rrtype in rrtypes:
-        url = "https://api.dnsdb.info/lookup/rrset/name/"+ wildcard + urllib.quote(domain) + "/" + rrtype + "/?limit=" + str(limit)
+        url = f"https://api.dnsdb.info/lookup/rrset/name/{wildcard}{urllib.quote(domain)}/{rrtype}/?limit={str(limit)}"
+
         try:
             r = requests.get(url,
                              proxies=settings.PROXIES,
@@ -37,7 +33,7 @@ def __request_pdns_dnsdb(domain, absolute, rrtypes, limit, pretty):
             try:
                 tmp = json.loads(line)
             except Exception as e:
-                results['error'] = "%s: %s" % (str(e), cgi.escape(line, quote=True))
+                results['error'] = f"{str(e)}: {cgi.escape(line, quote=True)}"
                 return results
             # Convert epoch timestamps to human readable.
             for key in ['time_first', 'time_last']:
@@ -71,17 +67,17 @@ def __make_passivetotal_request(url, params):
                                 proxies=settings.PROXIES,
                                 verify=settings.SSL_VERIFY)
     except Exception as e:
-        results['error'] = "PassiveTotal: network connection error (%s)" % e
+        results['error'] = f"PassiveTotal: network connection error ({e})"
         return results
 
     if response.status_code != 200:
-        results['error'] = "Response status code: %s" % response.status_code
+        results['error'] = f"Response status code: {response.status_code}"
         return results
 
     loaded = response.json()
 
     if not loaded['success']:
-        results['error'] = "PassiveTotal: query error (%s)" % loaded['error']
+        results['error'] = f"PassiveTotal: query error ({loaded['error']})"
         return results
 
     results['success'] = True
@@ -93,12 +89,11 @@ def __request_pdns_passivetotal(domain, absolute, rrtypes, limit, pretty):
     params = {'query': domain, 'api_key': settings.PASSIVETOTAL_KEY}
     url = 'https://www.passivetotal.org/api/v1/'
 
-    data = __make_passivetotal_request(url + 'passive/', params)
+    data = __make_passivetotal_request(f'{url}passive/', params)
     if data['success'] and len(data['results']) > 0:
         data = data['results']
 
-        subset = { 'title': 'Unique Resolutions' }
-        subset['data'] = data['unique_resolutions']
+        subset = {'title': 'Unique Resolutions', 'data': data['unique_resolutions']}
         results['subsets'].append(subset)
 
         enrichment = data['enrichment_map']
@@ -110,10 +105,11 @@ def __request_pdns_passivetotal(domain, absolute, rrtypes, limit, pretty):
                    'headers': ['Resolution', 'First Seen', 'Last Seen'],
                    'data': [] }
         for record in data['records']:
-            tmp = {}
-            tmp['last_seen'] = record['lastSeen']
-            tmp['first_seen'] = record['firstSeen']
-            tmp['resolve'] = record['resolve']
+            tmp = {
+                'last_seen': record['lastSeen'],
+                'first_seen': record['firstSeen'],
+                'resolve': record['resolve'],
+            }
 
             enrichment_record = enrichment[record['resolve']]
             # When searching for an IP the enrichment record has none of these
@@ -140,7 +136,7 @@ def __request_pdns_passivetotal(domain, absolute, rrtypes, limit, pretty):
     if not absolute:
         # Alter query parameter to be *.domain
         params['query'] = '*.' + params['query']
-        data = __make_passivetotal_request(url + 'subdomains/', params)
+        data = __make_passivetotal_request(f'{url}subdomains/', params)
         if data['success'] and len(data['results']) > 0:
             data = data['results']
 
@@ -148,11 +144,12 @@ def __request_pdns_passivetotal(domain, absolute, rrtypes, limit, pretty):
             for (subdomain, sub_data) in data['subdomains'].iteritems():
                 enrichment = sub_data['enrichment']
                 for entry in sub_data['records']:
-                    tmp = {}
-                    tmp['subdomain'] = subdomain + '.' + domain
-                    tmp['last_seen'] = entry['lastSeen']
-                    tmp['first_seen'] = entry['firstSeen']
-                    tmp['resolve'] = entry['resolve']
+                    tmp = {
+                        'subdomain': f'{subdomain}.{domain}',
+                        'last_seen': entry['lastSeen'],
+                        'first_seen': entry['firstSeen'],
+                        'resolve': entry['resolve'],
+                    }
 
                     enrichment_record = enrichment[entry['resolve']]
                     tmp['network'] = enrichment_record['network']
@@ -201,10 +198,10 @@ def request_pdns(domain, absolute, rrtypes, limit, pretty = False):
     return results
 
 def __request_pdns_reverse_dnsdb(key, value, rrtypes, limit, pretty):
-    results = {'success': False, 'type': 'DNSDB'}
-    results['data'] = {}
+    results = {'success': False, 'type': 'DNSDB', 'data': {}}
     for rrtype in rrtypes:
-        url = "https://api.dnsdb.info/lookup/rdata/"+ key +"/" + urllib.quote(value) + "/" + rrtype + "?limit=" + str(limit)
+        url = f"https://api.dnsdb.info/lookup/rdata/{key}/{urllib.quote(value)}/{rrtype}?limit={str(limit)}"
+
         try:
             r = requests.get(url,
                              proxies=settings.PROXIES,
@@ -223,7 +220,7 @@ def __request_pdns_reverse_dnsdb(key, value, rrtypes, limit, pretty):
             try:
                 tmp = json.loads(line)
             except Exception as e:
-                results['error'] = "%s: %s" % (str(e), cgi.escape(line, quote=True))
+                results['error'] = f"{str(e)}: {cgi.escape(line, quote=True)}"
                 return results
 
             # Convert epoch timestamps to human readable.
@@ -233,11 +230,7 @@ def __request_pdns_reverse_dnsdb(key, value, rrtypes, limit, pretty):
 
             rrtype = tmp['rrtype']
             #Strip the MX weight
-            if rrtype == 'MX':
-                tmp['rdata'] = [tmp['rdata'].split()[1]]
-            else:
-                tmp['rdata'] = [tmp['rdata']]
-
+            tmp['rdata'] = [tmp['rdata'].split()[1]] if rrtype == 'MX' else [tmp['rdata']]
             if pretty:
                 if tmp['rrname'][-1] == ".":
                     tmp['rrname'] = tmp['rrname'][:-1]

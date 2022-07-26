@@ -38,24 +38,22 @@ def dataTable(request, key, value, low = None, high = None):
 
     key = urllib.unquote(key)
     value = urllib.unquote(value)
-    
-    #TODO Support Post -- need to add cooresponding form
-    if request.method == "GET":
-        page = int(request.GET.get('iDisplayStart', 0))
-        pagesize = int(request.GET.get('iDisplayLength', 50))
-        sortcols = int(request.GET.get('iSortingCols', 0))
-        sEcho = request.GET.get('sEcho')
-        sSearch = request.GET.get('sSearch', '')
 
-        sort = []
-        for x in range(sortcols):
-            sortTuple = handler.formatSort(int(request.GET.get("iSortCol_%d" % x)), 
-                                                request.GET.get("sSortDir_%d" % x))
-            if sortTuple is not None:
-                sort.append(sortTuple)
-
-    else:
+    if request.method != "GET":
         return __renderErrorJSON__('Unsupported Method')
+
+    page = int(request.GET.get('iDisplayStart', 0))
+    pagesize = int(request.GET.get('iDisplayLength', 50))
+    sortcols = int(request.GET.get('iSortingCols', 0))
+    sEcho = request.GET.get('sEcho')
+    sSearch = request.GET.get('sSearch', '')
+
+    sort = []
+    for x in range(sortcols):
+        sortTuple = handler.formatSort(int(request.GET.get("iSortCol_%d" % x)), 
+                                            request.GET.get("sSortDir_%d" % x))
+        if sortTuple is not None:
+            sort.append(sortTuple)
 
     if (len(sSearch) == 0):
         sSearch = None
@@ -63,7 +61,7 @@ def dataTable(request, key, value, low = None, high = None):
     results = handler.dataTableSearch(key, value, page, pagesize, sort, sSearch, low, high)
     #Echo back the echo
     results['sEcho'] = sEcho
-    
+
     return HttpResponse(json.dumps(results), content_type='application/json')
 
 
@@ -71,56 +69,49 @@ def advDataTable(request):
     if not request.is_ajax():
         return __renderErrorJSON__('Expected AJAX')
 
-    #TODO Support Post -- need to add cooresponding form
-    if request.method == "GET":
-        query = request.GET.get('query', '')
-        page = int(request.GET.get('iDisplayStart', 0))
-        pagesize = int(request.GET.get('iDisplayLength', 50))
-        sortcols = int(request.GET.get('iSortingCols', 0))
-        sEcho = request.GET.get('sEcho')
-        sSearch = request.GET.get('sSearch', '')
-        if settings.ES_SCRIPTING_ENABLED:
-            unique = request.GET.get('unique', 'false')
-        else:
-            unique = 'false'
-        sort = []
-    else:
+    if request.method != "GET":
         return __renderErrorJSON__('Unsupported Method')
 
+    query = request.GET.get('query', '')
+    page = int(request.GET.get('iDisplayStart', 0))
+    pagesize = int(request.GET.get('iDisplayLength', 50))
+    sortcols = int(request.GET.get('iSortingCols', 0))
+    sEcho = request.GET.get('sEcho')
+    sSearch = request.GET.get('sSearch', '')
+    unique = (
+        request.GET.get('unique', 'false')
+        if settings.ES_SCRIPTING_ENABLED
+        else 'false'
+    )
+
+    sort = []
     query = urllib.unquote(query)
     sSearch = None
 
-    if unique.lower() == 'true':
-        unique = True
-    else:
-        unique = False
-
+    unique = unique.lower() == 'true'
     results = handler.advDataTableSearch(query, page, pagesize, unique)
     #Echo back the echo
     results['sEcho'] = sEcho
-    
+
     return HttpResponse(json.dumps(results), content_type='application/json')
 
 def advanced_search(request):
-    if request.method == "GET":
-        search_string = urllib.unquote(request.GET.get('query', None))
-        size = int(request.GET.get('size', 20))
-        page = int(request.GET.get('page', 1)) 
-        if settings.ES_SCRIPTING_ENABLED:
-            unique = request.GET.get('unique', 'false')
-        else:
-            unique = 'false'
-    else:
+    if request.method != "GET":
         return __renderErrorJSON__('Unsupported Method')
 
-    if unique.lower() == 'true':
-        unique = True
-    else:
-        unique = False
+    search_string = urllib.unquote(request.GET.get('query', None))
+    size = int(request.GET.get('size', 20))
+    page = int(request.GET.get('page', 1))
+    unique = (
+        request.GET.get('unique', 'false')
+        if settings.ES_SCRIPTING_ENABLED
+        else 'false'
+    )
 
+    unique = unique.lower() == 'true'
     if search_string is None:
         return __renderErrorJSON__("Query required")
-        
+
     skip = (page - 1) * size
     results = handler.advanced_search(search_string, skip, size, unique)
     if results['success'] == False:
@@ -142,17 +133,14 @@ def domains(request, key, value, low = None, high = None):
 
     key = urllib.unquote(key)
     value = urllib.unquote(value)
-    
+
     #TODO Support Post -- need to add cooresponding form
     if request.method == "GET":
         limit = int(request.GET.get('limit', settings.LIMIT))
     else:
         return __renderErrorJSON__('Unsupported Method')
 
-    versionSort = False
-    if key == 'domainName':
-        versionSort = True
-
+    versionSort = key == 'domainName'
     results = handler.search(key, value, filt = None, low = low, high = high, versionSort = versionSort)
     if results['success'] == False:
         return __renderErrorJSON__(results['message'])
@@ -171,57 +159,47 @@ def domain(request, domainName = None, low = None, high = None):
         results = handler.search('domainName', domainName, filt=None, low = low, high = high, versionSort = True)
 
         return HttpResponse(json.dumps(results), content_type='application/json')
-        if results['success']: #Clean up the data
-            results['data'] = results['data'][0]
-            del results['total']
-            del results['avail']
-            return HttpResponse(json.dumps(results), content_type='application/json')
-        else:
-            return __renderErrorJSON__(results['message'])
     else:
         return __renderErrorJSON__('Bad Method.')
 
 def domain_diff(request, domainName = None, v1 = None, v2 = None):
-    if request.method == "GET":
-        if not domainName or not v1 or not v2:
-            return __renderErrorJSON__('Required Parameters Missing')
-        domainName = urllib.unquote(domainName)
-
-        v1_res = handler.search('domainName', domainName, filt=None, low = int(v1))
-        v2_res = handler.search('domainName', domainName, filt=None, low = int(v2))
-
-        try:
-            v1_res = v1_res['data'][0]
-            v2_res = v2_res['data'][0]
-        except:
-            return __renderErrorJSON__("Did not find results")
-
-        keylist = set(v1_res.keys()).union(set(v2_res.keys()))
-
-        keylist.remove('Version')
-        keylist.remove('domainName')
-        keylist.remove('dataUniqueID')
-        keylist.remove('dataFirstSeen')
-
-        output = {}
-        data = {}
-        for key in keylist: 
-            if key in v1_res and key in v2_res:
-                if v1_res[key] == v2_res[key]:
-                    data[key] = v1_res[key]
-                else:
-                    data[key] = [v1_res[key], v2_res[key]]
-            else:
-                try:
-                    data[key] = [v1_res[key], '']
-                except:
-                    data[key] = ['', v2_res[key]]
-        
-        output['success'] = True 
-        output['data'] = data
-        return HttpResponse(json.dumps(output), content_type='application/json')
-    else:
+    if request.method != "GET":
         return __renderErrorJSON__('Bad Method.')
+    if not domainName or not v1 or not v2:
+        return __renderErrorJSON__('Required Parameters Missing')
+    domainName = urllib.unquote(domainName)
+
+    v1_res = handler.search('domainName', domainName, filt=None, low = int(v1))
+    v2_res = handler.search('domainName', domainName, filt=None, low = int(v2))
+
+    try:
+        v1_res = v1_res['data'][0]
+        v2_res = v2_res['data'][0]
+    except:
+        return __renderErrorJSON__("Did not find results")
+
+    keylist = set(v1_res.keys()).union(set(v2_res.keys()))
+
+    keylist.remove('Version')
+    keylist.remove('domainName')
+    keylist.remove('dataUniqueID')
+    keylist.remove('dataFirstSeen')
+
+    data = {}
+    for key in keylist: 
+        if key in v1_res and key in v2_res:
+            if v1_res[key] == v2_res[key]:
+                data[key] = v1_res[key]
+            else:
+                data[key] = [v1_res[key], v2_res[key]]
+        else:
+            try:
+                data[key] = [v1_res[key], '']
+            except:
+                data[key] = ['', v2_res[key]]
+
+    output = {'success': True, 'data': data}
+    return HttpResponse(json.dumps(output), content_type='application/json')
 
 
 def resolve(request, domainName = None):
