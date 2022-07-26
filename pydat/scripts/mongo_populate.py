@@ -56,11 +56,7 @@ def scan_directory(work_queue, collection, directory, options):
             parse_csv(work_queue, collection, full_path, options)
 
 def check_header(header):
-    for field in header:
-        if field == "domainName":
-            return True
-
-    return False
+    return any(field == "domainName" for field in header)
 
 
 def parse_csv(work_queue, collection, filename, options):
@@ -133,21 +129,21 @@ def update_required(collection, header, input_entry, options):
         return False
 
     current_entry = None
-    domainName = ''
-    for i,item in enumerate(input_entry):
-        if header[i] == 'domainName':
-            domainName = item
-            break
+    domainName = next(
+        (
+            item
+            for i, item in enumerate(input_entry)
+            if header[i] == 'domainName'
+        ),
+        '',
+    )
 
     current_entry = find_entry(collection, domainName)
 
     if current_entry is None:
         return True
 
-    if current_entry[VERSION_KEY] == options.identifier: #This record already up to date
-        return False 
-    else:
-        return True
+    return current_entry[VERSION_KEY] != options.identifier
 
 def update_stats(stat):
     global STATS_LOCK
@@ -262,8 +258,7 @@ def process_entry(insert_queue, collection, header, input_entry, options):
         insert_queue.put({'type': 'insert', 'insert':entry})
 
 def generate_id(domainName, identifier):
-    dhash = hashlib.md5(domainName).hexdigest() + str(identifier)
-    return dhash
+    return hashlib.md5(domainName).hexdigest() + str(identifier)
     
 
 def find_entry(collection, domainName):

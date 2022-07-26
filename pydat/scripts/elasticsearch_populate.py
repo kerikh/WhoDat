@@ -40,15 +40,15 @@ finished_event = multiprocessing.Event()
 bulkError_event = multiprocessing.Event()
 
 def connectElastic(uri):
-    es = Elasticsearch(uri,
-                       sniff_on_start=True,
-                       max_retries=100,
-                       retry_on_timeout=True,
-                       sniff_on_connection_fail=True,
-                       sniff_timeout=1000,
-                       timeout=100)
-
-    return es
+    return Elasticsearch(
+        uri,
+        sniff_on_start=True,
+        max_retries=100,
+        retry_on_timeout=True,
+        sniff_on_connection_fail=True,
+        sniff_timeout=1000,
+        timeout=100,
+    )
 
 ######## READER THREAD ######
 def reader_worker(work_queue, options):
@@ -76,11 +76,7 @@ def scan_directory(work_queue, directory, options):
             parse_csv(work_queue, full_path, options)
 
 def check_header(header):
-    for field in header:
-        if field == "domainName":
-            return True
-
-    return False
+    return any(field == "domainName" for field in header)
 
 
 def parse_csv(work_queue, filename, options):
@@ -88,7 +84,7 @@ def parse_csv(work_queue, filename, options):
         return
 
     if options.verbose:
-        print("Processing file: %s" % filename)
+        print(f"Processing file: {filename}")
 
     csvfile = open(filename, 'rb')
     dnsreader = unicodecsv.reader(csvfile, strict = True, skipinitialspace = True)
@@ -130,7 +126,7 @@ def es_bulk_shipper_proc(bulk_request_queue, position, options):
             try:
                 resp = es.bulk(body=bulk_request)
             except Exception as e:
-                with open('/tmp/pydat-bulk-%s-%s.txt' % (options.identifier, uuid.uuid1()), 'wb') as f:
+                with open(f'/tmp/pydat-bulk-{options.identifier}-{uuid.uuid1()}.txt', 'wb') as f:
                     for request in bulk_request:
                         f.write('%s\n' % json.dumps(request))
 
@@ -165,13 +161,9 @@ def es_bulk_shipper_proc(bulk_request_queue, position, options):
                             if key in twoliners:
                                 bulkOut.write("%s\n" % json.dumps(bulk_request[original_request_position + 1]))
 
-                        if key in twoliners:
-                            original_request_position += 2
-                        else:
-                            original_request_position += 1
-
+                        original_request_position += 2 if key in twoliners else 1
                     if len(bulkOut.getvalue()) > 0:
-                        with open("/tmp/pydat-bulk-%s-%s.txt" % (options.identifier, uuid.uuid1()), 'wb') as f:
+                        with open(f"/tmp/pydat-bulk-{options.identifier}-{uuid.uuid1()}.txt", 'wb') as f:
                             f.write(bulkOut.getvalue())
 
                         if not bulkError_event.is_set():
@@ -183,9 +175,9 @@ def es_bulk_shipper_proc(bulk_request_queue, position, options):
                     bulkOut.close()
             except Exception as e:
                 sys.stdout.write("Unhandled Exception attempting to handle error from bulk import: %s %s\n" % (str(e), traceback.format_exc()))
-            #sys.stdout.write("Bulk request Complete\n")
+                    #sys.stdout.write("Bulk request Complete\n")
         except Exception as e:
-            sys.stdout.write("Exception making bulk request: %s" % str(e))
+            sys.stdout.write(f"Exception making bulk request: {str(e)}")
         finally:
             bulk_request_queue.task_done()
 
@@ -235,10 +227,7 @@ def update_required(current_entry, options):
     if current_entry is None:
         return True
 
-    if current_entry['_source'][VERSION_KEY] == options.identifier: #This record already up to date
-        return False 
-    else:
-        return True
+    return current_entry['_source'][VERSION_KEY] != options.identifier
 
 def process_worker(work_queue, insert_queue, stats_queue, options):
     global shutdown_event
@@ -322,19 +311,13 @@ def parse_entry(input_entry, header, options):
                 sys.stdout.write("Processing domain: %s\n" % item)
             domainName = item
             continue
-        if item == "":
-            details[header[i]] = None
-        else:
-            details[header[i]] = htmlparser.unescape(item)
-
-    entry = {
-                VERSION_KEY: options.identifier,
-                FIRST_SEEN: options.identifier,
-                'details': details,
-                'domainName': domainName,
-            }
-
-    return entry
+        details[header[i]] = None if item == "" else htmlparser.unescape(item)
+    return {
+        VERSION_KEY: options.identifier,
+        FIRST_SEEN: options.identifier,
+        'details': details,
+        'domainName': domainName,
+    }
 
 def process_command(request, index, _id, _type, entry = None):
     if request == 'create':
@@ -400,7 +383,7 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
 
             changed = set(details_copy.items()) - set(current_entry['details'].items()) 
             diff = len(set(details_copy.items()) - set(current_entry['details'].items())) > 0
-            
+
         else:
             changed = set(details.items()) - set(current_entry['details'].items()) 
             diff = len(set(details.items()) - set(current_entry['details'].items())) > 0
@@ -419,26 +402,23 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
             if options.vverbose:
                 sys.stdout.write("%s: Updated\n" % domainName)
 
-            index_name = "%s-%s" % (options.index_prefix, options.identifier)
+            index_name = f"{options.index_prefix}-{options.identifier}"
             if options.enable_delta_indexes:
                 index_name += "-o"
-                # Delete old entry, put into a 'diff' index
-                api_commands.append(process_command(
-                                                    'delete',
-                                                    current_index,
-                                                    current_id,
-                                                    current_type
-                                    ))
-
-                # Put it into a previousVersion-d index so it doesn't potentially create
-                # a bunch of indexes that will need to be cleaned up later
-                api_commands.append(process_command(
-                                                    'create',
-                                                    "%s-%s-d" % (options.index_prefix, options.previousVersion),
-                                                    current_id,
-                                                    current_type,
-                                                    current_entry
-                                    ))
+                api_commands.extend(
+                    (
+                        process_command(
+                            'delete', current_index, current_id, current_type
+                        ),
+                        process_command(
+                            'create',
+                            f"{options.index_prefix}-{options.previousVersion}-d",
+                            current_id,
+                            current_type,
+                            current_entry,
+                        ),
+                    )
+                )
 
             entry[FIRST_SEEN] = current_entry[FIRST_SEEN]
             entry_id = generate_id(domainName, options.identifier)
@@ -473,7 +453,7 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
         entry_id = generate_id(domainName, options.identifier)
         entry[UNIQUE_KEY] = entry_id
         (domain_name_only, tld) = parse_domain(domainName)
-        index_name = "%s-%s" % (options.index_prefix, options.identifier)
+        index_name = f"{options.index_prefix}-{options.identifier}"
         if options.enable_delta_indexes:
             index_name += "-o"
         api_commands.append(process_command(
@@ -488,8 +468,7 @@ def process_entry(insert_queue, stats_queue, es, entry, current_entry_raw, optio
         insert_queue.put(command)
 
 def generate_id(domainName, identifier):
-    dhash = hashlib.md5(domainName.encode('utf-8')).hexdigest() + str(identifier)
-    return dhash
+    return hashlib.md5(domainName.encode('utf-8')).hexdigest() + str(identifier)
 
 def parse_tld(domainName):
     parts = domainName.rsplit('.', 1)
@@ -510,13 +489,9 @@ def find_entry(es, domainName, options):
 
         result = es.mget(body = {"docs": docs})
 
-        for res in result['docs']:
-            if res['found']:
-                return res
-
-        return None
+        return next((res for res in result['docs'] if res['found']), None)
     except Exception as e:
-        print("Unable to find %s, %s" % (domainName, str(e)))
+        print(f"Unable to find {domainName}, {str(e)}")
         return None
 
 
@@ -524,20 +499,28 @@ def unOptimizeIndexes(es, template, options):
     if not options.optimize_import:
         return
 
-    index_name = "%s-%s" % (options.index_prefix, options.identifier)
+    index_name = f"{options.index_prefix}-{options.identifier}"
     if options.enable_delta_indexes:
         index_name += "-o"
 
         try:
             if options.previousVersion != 0:
-                es.indices.put_settings(index="%s-%s-d" % (options.index_prefix, options.previousVersion),
-                                    body = {"settings": {
-                                                "index": {
-                                                    "number_of_replicas": template['settings']['number_of_replicas'],
-                                                    "refresh_interval": template['settings']["refresh_interval"]
-                                                }
-                                            }
-                                    })
+                es.indices.put_settings(
+                    index=f"{options.index_prefix}-{options.previousVersion}-d",
+                    body={
+                        "settings": {
+                            "index": {
+                                "number_of_replicas": template['settings'][
+                                    'number_of_replicas'
+                                ],
+                                "refresh_interval": template['settings'][
+                                    "refresh_interval"
+                                ],
+                            }
+                        }
+                    },
+                )
+
         except Exception as e:
             pass
 
@@ -558,20 +541,24 @@ def optimizeIndexes(es, options):
         return
 
     # Update the Index(es) with altered settings to help with bulk import
-    index_name = "%s-%s" % (options.index_prefix, options.identifier)
+    index_name = f"{options.index_prefix}-{options.identifier}"
     if options.enable_delta_indexes:
         index_name += "-o"
 
         try:
             if options.previousVersion != 0:
-                es.indices.put_settings(index= "%s-%s-d" % (options.index_prefix, options.previousVersion),
-                                    body = {"settings": {
-                                                "index": {
-                                                    "number_of_replicas": 0,
-                                                    "refresh_interval": "300s"
-                                                }
-                                            }
-                                    })
+                es.indices.put_settings(
+                    index=f"{options.index_prefix}-{options.previousVersion}-d",
+                    body={
+                        "settings": {
+                            "index": {
+                                "number_of_replicas": 0,
+                                "refresh_interval": "300s",
+                            }
+                        }
+                    },
+                )
+
         except Exception as e:
             pass
 

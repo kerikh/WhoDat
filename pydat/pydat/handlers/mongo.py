@@ -16,26 +16,24 @@ def mongo_connector(collection, preference=settings.MONGO_READ_PREFERENCE):
         db = connection[settings.MONGO_DATABASE]
         return db[collection]
     except pymongo.errors.ConnectionFailure as e:
-        raise MongoError("Error connecting to Mongo database: %s" % e)
+        raise MongoError(f"Error connecting to Mongo database: {e}")
     except KeyError as e:
-        raise MongoError("Unknown database or collection: %s" % e)
-    except:
-        raise
+        raise MongoError(f"Unknown database or collection: {e}")
 
 def lastVersion():
     try:
-        coll = mongo_connector(settings.COLL_WHOIS + "_meta")
+        coll = mongo_connector(f"{settings.COLL_WHOIS}_meta")
     except MongoError as e:
         return -1
 
     metadata = coll.find_one({'metadata': 0})
-    
+
     return metadata['lastVersion']
 
 def metadata(version = None):
     results = {'success': False}
     try:
-        coll = mongo_connector(settings.COLL_WHOIS + "_meta")
+        coll = mongo_connector(f"{settings.COLL_WHOIS}_meta")
     except MongoError as e:
         results['message'] = str(e)
         return results
@@ -46,11 +44,7 @@ def metadata(version = None):
         version = int(version)
         res = coll.find({'metadata':version}, {'_id':False})
 
-    results['data'] = []
-    for r in res:
-        results['data'].append(r)
-
-    
+    results['data'] = list(res)
     results['success'] = True
 
     return results
@@ -76,10 +70,7 @@ def formatSort(colID, direction):
     if direction == "desc":
         sort_dir = pymongo.DESCENDING
 
-    if sort_key is None:
-        return None
-
-    return (sort_key, sort_dir)
+    return None if sort_key is None else (sort_key, sort_dir)
     
 
 def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
@@ -91,26 +82,21 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
         return results
 
     if key != settings.SEARCH_KEYS[0][0]:
-        query = {'details.' + key: value}
+        query = {f'details.{key}': value}
     else:
         query = {key: value}
 
     if low is not None:
-        if low == high or high is None: # single version
-            try:
+        try:
+            if low == high or high is None:
                 query['dataVersion'] = int(low)
-            except: #TODO XXX
-                pass
-        elif high is not None:
-            try:
+            else:
                 query['dataVersion'] = {'$gte': int(low), '$lte': int(high)}
-            except: #TODO XXX
-                pass 
-        
-
+        except: #TODO XXX
+            pass
     if sfilter is not None:
         try:
-            regx = re.compile("%s" % sfilter, re.IGNORECASE)
+            regx = re.compile(f"{sfilter}", re.IGNORECASE)
         except:
             results['aaData'] = []
             results['iTotalRecords'] = coll.count()
@@ -123,7 +109,7 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
                 if skey == key: #Don't bother filtering on the key field
                     continue
                 if skey != settings.SEARCH_KEYS[0][0]:
-                    exp = {'details.' + skey: {'$regex': regx}}
+                    exp = {f'details.{skey}': {'$regex': regx}}
                 else:
                     exp = {skey: {'$regex': regx}}
                 query['$or'].append(exp)
@@ -148,12 +134,7 @@ def dataTableSearch(key, value, skip, pagesize, sortset, sfilter, low, high):
     return results
 
 def advDataTableSearch(query, skip, pagesize):
-    results = {
-               'success': False,
-               'aaData' : []
-              }
-
-    return results
+    return {'success': False, 'aaData': []}
 
 def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None, versionSort = False):
     results = {'success': False}
@@ -164,7 +145,7 @@ def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None,
         return results
 
     if key != settings.SEARCH_KEYS[0][0]:
-        search_document = {'details.' + key: value}
+        search_document = {f'details.{key}': value}
     else:
         search_document = {key: value}
 
@@ -175,17 +156,15 @@ def search(key, value, filt=None, limit=settings.LIMIT, low = None, high = None,
     if filt == 'domainName':
         filt_document[filt] = 1
     elif filt != None:
-        filt_document['details.' + filt] = 1
+        filt_document[f'details.{filt}'] = 1
 
     if low != None:
         if low == high or high is None:
             search_document['dataVersion'] = int(low)
-        elif high is not None:
+        else:
             search_document['dataVersion'] = {'$gte': int(low), '$lte': int(high)}
 
-    sortset = None
-    if versionSort:
-        sortset = [('dataVersion', pymongo.ASCENDING)] 
+    sortset = [('dataVersion', pymongo.ASCENDING)] if versionSort else None
     domains = coll.find(search_document, filt_document, limit=limit, sort = sortset)
 
     results['total'] = domains.count()
@@ -209,8 +188,7 @@ def test_query(search_string):
     return "Advanced Search not supported with Mongo"
 
 def advanced_search(search_string, skip = 0, size = 20):
-    results = {
-                'success': False,
-                'message': 'Advanced Search not supported with Mongo',
-              }
-    return results
+    return {
+        'success': False,
+        'message': 'Advanced Search not supported with Mongo',
+    }

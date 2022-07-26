@@ -64,7 +64,7 @@ t_ignore = " \t\n"
 #    t.lexer.lineno += t.value.count("\n")
 
 def t_error(t):
-    raise ValueError("Illegal sequence: %s" % t.value)
+    raise ValueError(f"Illegal sequence: {t.value}")
     #t.lexer.skip(1)
 
 # Build the lexer
@@ -311,7 +311,7 @@ def create_combined_and(queries):
         query = {'match_all': {}}
     elif len(query['bool']['must']) == 1:
         query = query['bool']['must'][0]
-    
+
 
     return {
         "query": {
@@ -354,7 +354,7 @@ def p_query_or_query(t):
         filt = {"match_all": {}}
         for q in (t[1], t[3]):
             query['bool']['should'].append(q['query'])
-        
+
 
     t[0] = {
         "query": {
@@ -382,10 +382,10 @@ def create_specific_word_subquery(key, value):
             fields1 = shortcut_keywords[key]
         elif key in original_keywords:
             if key != 'domainName':
-                key = 'details.' + key
+                key = f'details.{key}'
             fields1 = [key]
         else:
-            raise KeyError("Unknown field %s" % key)
+            raise KeyError(f"Unknown field {key}")
 
         nf = []
         for f in fields1:
@@ -394,14 +394,7 @@ def create_specific_word_subquery(key, value):
             nf.append(f)
         fields1 = nf
 
-    q = {
-        'multi_match': {
-            "query": value,
-            "fields": fields1 
-        }
-    } 
-
-    return q
+    return {'multi_match': {"query": value, "fields": fields1}}
 
 
 def p_specific_fuzzy_word(t):
@@ -409,10 +402,7 @@ def p_specific_fuzzy_word(t):
 
     key = t[2]
     value = t[4]
-    if len(t[1]) == 1:
-        fuzzy = 'AUTO'
-    else:
-        fuzzy = int(t[1][1])
+    fuzzy = 'AUTO' if len(t[1]) == 1 else int(t[1][1])
     value = remove_escapes(value)
 
     sub_query = create_specific_word_subquery(key, value)
@@ -435,11 +425,7 @@ def p_specific_fuzzy_quoted(t):
     'specific : FUZZY WORD COLON QUOTED'
     key = t[2]
     value = t[4]
-    if len(t[1]) == 1:
-        fuzzy = 'AUTO'
-    else:
-        fuzzy = int(t[1][1])
-
+    fuzzy = 'AUTO' if len(t[1]) == 1 else int(t[1][1])
     value = remove_escapes(value[1:-1])
     value = value.lower()
 
@@ -453,7 +439,7 @@ def p_specific_fuzzy_quoted(t):
             fields1 = shortcut_keywords[key]
         elif key in original_keywords:
             if key != 'domainName':
-                key = 'details.' + key
+                key = f'details.{key}'
             fields1 = [key]
         else:
             raise KeyError("Unknown field")
@@ -495,7 +481,7 @@ def p_specific_quoted(t):
             fields1 = shortcut_keywords[key]
         elif key in original_keywords:
             if key != 'domainName':
-                key = 'details.' + key
+                key = f'details.{key}'
             fields1 = [key]
         else:
             raise KeyError("Unknown field")
@@ -515,9 +501,7 @@ def p_specific_quoted(t):
 
     for f in fields2:
         if len(split_vals) > 1:
-            spans = []
-            for p in split_vals:
-                spans.append({'span_term': {f:p}})
+            spans = [{'span_term': {f:p}} for p in split_vals]
             shds.append({'span_near': { 'clauses': spans, 'slop': 1, 'in_order': 'true'}})
         else:
             shd = {'term': {f: {"value": value}}}
@@ -545,7 +529,7 @@ def create_wildreg_query(key, value, qtype):
             fields1 = shortcut_keywords[key]
         elif key in original_keywords:
             if key != 'domainName':
-                key = 'details.' + key
+                key = f'details.{key}'
             fields1 = [key]
         else:
             raise KeyError("Unknown field")
@@ -598,23 +582,21 @@ def create_daterange_query(key, start, end):
     if key not in date_keywords:
         raise KeyError("Unknown Key")
     key = date_keywords[key]
-    qf = {
-    'query':{
-        'filtered': {
-            'filter': { 
-                'range': {
-                    key: {
-                        'gte': start.strftime('%Y-%m-%d %H:%M:%S'),
-                        'lt': end.strftime('%Y-%m-%d %H:%M:%S'),
+    return {
+        'query': {
+            'filtered': {
+                'filter': {
+                    'range': {
+                        key: {
+                            'gte': start.strftime('%Y-%m-%d %H:%M:%S'),
+                            'lt': end.strftime('%Y-%m-%d %H:%M:%S'),
+                        }
                     }
-                }
-            },
-            'query': {'match_all': {}},
+                },
+                'query': {'match_all': {}},
             }
         }
     }
-
-    return qf
 
 def p_daterange_single(t):
     'daterange : WORD COLON DATE'
@@ -622,7 +604,7 @@ def p_daterange_single(t):
     try:
         start = datetime.datetime.strptime(t[3], '%Y-%m-%d')
     except Exception as e:
-        raise ValueError("Invalid Date Format: %s" % str(e))
+        raise ValueError(f"Invalid Date Format: {str(e)}")
 
     end = start + datetime.timedelta(1,0)
 
@@ -653,20 +635,12 @@ def p_termquery_quoted(t):
     ll = looks_like(term)
     if ll is None:
         if len(terms) > 1:
-            spns = []
-            for p in terms:
-                spns.append({'span_term': {'_all': p}})
+            spns = [{'span_term': {'_all': p}} for p in terms]
             query = {'span_near': {'clauses': spns, 'slop': 1, 'in_order': 'true'}}
         else:
             query = {'term': {'_all': term}}
     else:
-        if ll == 'email':
-            fields = [
-                       ("details.administrativeContact_email.parts", 1.5),
-                       ("details.registrant_email.parts", 1.5),
-                       ("_all", 1.0)
-                     ]
-        elif ll == 'domain':
+        if ll == 'domain':
             fields = [
                        ("domainName.parts", 2.0),
                        ("details.administrativeContact_email.parts", 1.5),
@@ -674,12 +648,16 @@ def p_termquery_quoted(t):
                        ("_all", 1.0)
                      ]
 
+        elif ll == 'email':
+            fields = [
+                       ("details.administrativeContact_email.parts", 1.5),
+                       ("details.registrant_email.parts", 1.5),
+                       ("_all", 1.0)
+                     ]
         queries = []
         for (f, boost_val) in fields:
             if len(terms) > 1:
-                spans = []
-                for p in terms:
-                    spans.append({'span_term': {f: p}})
+                spans = [{'span_term': {f: p}} for p in terms]
                 queries.append({'span_near': {'clauses': spans, 'slop': 1, 'in_order': 'true', 'boost': boost_val}})
             else:
                 shd = {'term': {f: {"value": terms[0], 'boost': boost_val}}}
@@ -725,10 +703,7 @@ def remove_escapes(t):
         if p == '':
             continue
         else:
-            if p[0] == '\\':
-                unescaped_string += p[1]
-            else:
-                unescaped_string += p 
+            unescaped_string += p[1] if p[0] == '\\' else p
     return unescaped_string
 
 def p_error(t):
